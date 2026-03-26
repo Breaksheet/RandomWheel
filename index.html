@@ -258,9 +258,17 @@
       font-family: 'Fredoka One', cursive;
       font-size: .95rem; color: var(--muted); margin-bottom: .45rem; margin-top: 1rem;
     }
+    .hl-scroll {
+      max-height: 230px;
+      overflow-y: auto;
+      overflow-x: visible;
+      scrollbar-width: thin;
+      scrollbar-color: var(--surf2) transparent;
+    }
     .hl {
       list-style: none; display: flex; flex-direction: column;
-      gap: .28rem; max-height: 230px; overflow-y: auto;
+      gap: .28rem;
+      overflow: visible;
     }
     .hl li {
       font-size: .85rem; font-weight: 700; color: var(--muted);
@@ -272,6 +280,73 @@
     .hl .pick-ts {
       font-size: .72rem; color: var(--cyan); opacity: .8;
       font-weight: 700; white-space: nowrap; flex-shrink: 0; letter-spacing: .02em;
+    }
+
+    /* Participant tooltip */
+    .hl li {
+      position: static;
+      cursor: default;
+    }
+    .hl li .participants-tip {
+      display: none;
+      position: fixed;
+      background: #12082a;
+      border: 1px solid var(--gold);
+      border-radius: 10px;
+      padding: .65rem .85rem;
+      min-width: 180px;
+      max-width: 280px;
+      z-index: 9999;
+      box-shadow: 0 6px 24px rgba(0,0,0,.8), 0 0 16px rgba(255,216,77,.18);
+      pointer-events: none;
+    }
+    .hl li:hover .participants-tip { display: block; }
+    .participants-tip::after {
+      content: '';
+      position: absolute;
+      top: 100%; left: 50%;
+      transform: translateX(-50%);
+      border: 6px solid transparent;
+      border-top-color: var(--gold);
+    }
+    .participants-tip .tip-title {
+      font-family: 'Fredoka One', cursive;
+      font-size: .78rem;
+      color: var(--gold);
+      margin-bottom: .4rem;
+      display: block;
+      letter-spacing: .04em;
+    }
+    .participants-tip .tip-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: .2rem;
+    }
+    .participants-tip .tip-list li {
+      font-size: .78rem;
+      font-weight: 700;
+      color: var(--text);
+      background: var(--surf2);
+      border-radius: 5px;
+      padding: .18rem .5rem;
+      display: flex;
+      align-items: center;
+      gap: .35rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .participants-tip .tip-list li::before { content: none; }
+    .participants-tip .tip-list li.is-winner {
+      color: var(--gold);
+      background: rgba(255,216,77,.12);
+    }
+    .participants-tip .tip-list li.is-winner::after {
+      content: '🏆';
+      font-size: .7rem;
+      margin-left: auto;
+      flex-shrink: 0;
     }
 
     .cloud-section { margin-top: 1.2rem; }
@@ -480,7 +555,7 @@
 
     <div class="hw">
       <h3>Recent picks</h3>
-      <ol class="hl" id="hl" reversed></ol>
+      <div class="hl-scroll"><ol class="hl" id="hl" reversed></ol></div>
     </div>
 
     <div class="cloud-section">
@@ -614,8 +689,8 @@ function renderList() {
 }
 
 /* ── History ────────────────────────────────────────────── */
-function addHist(name) {
-  history.unshift({ name, ts: Date.now() });
+function addHist(name, participants) {
+  history.unshift({ name, ts: Date.now(), participants: participants || [] });
   if (history.length > MAX_HIST) history.length = MAX_HIST;
   save(); renderHist();
 }
@@ -623,12 +698,37 @@ function renderHist() {
   hl.innerHTML = '';
   history.forEach(entry => {
     const li = document.createElement('li');
+
     const ns = document.createElement('span');
     ns.className = 'pick-name';
     ns.textContent = entry.name;
+
     const ts = document.createElement('span');
     ts.className = 'pick-ts';
     ts.textContent = entry.ts ? toKyivTime(entry.ts) : '';
+
+    // Tooltip showing all participants from that spin
+    if (entry.participants && entry.participants.length) {
+      const tip = document.createElement('div');
+      tip.className = 'participants-tip';
+
+      const title = document.createElement('span');
+      title.className = 'tip-title';
+      title.textContent = entry.participants.length + ' participants';
+      tip.appendChild(title);
+
+      const ul = document.createElement('ul');
+      ul.className = 'tip-list';
+      entry.participants.forEach(p => {
+        const pli = document.createElement('li');
+        if (p === entry.name) pli.classList.add('is-winner');
+        pli.textContent = p;
+        ul.appendChild(pli);
+      });
+      tip.appendChild(ul);
+      li.appendChild(tip);
+    }
+
     li.append(ns, ts);
     hl.appendChild(li);
   });
@@ -773,8 +873,9 @@ function spin() {
       spinning = false;
       document.body.classList.remove('spinning');
       const wn = names[winnerIdx()];
+      const participants = [...names]; // snapshot of who was in this spin
       showRes(wn);
-      addHist(wn);
+      addHist(wn, participants);
       showModal(wn);
       if (typeof window._fbSaveResult === 'function') window._fbSaveResult(wn);
       spinB.disabled = false;
@@ -818,6 +919,22 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && modal.style.display !== 'none') hideModal();
 });
 
+/* ── Tooltip mouse tracking ─────────────────────────────── */
+// Since tooltip is position:fixed we position it via JS on mousemove
+document.addEventListener('mousemove', function(e) {
+  const tip = document.querySelector('.hl li:hover .participants-tip');
+  if (!tip) return;
+  const tw = tip.offsetWidth  || 220;
+  const th = tip.offsetHeight || 120;
+  let x = e.clientX - tw / 2;
+  let y = e.clientY - th - 14; // above cursor
+  // Clamp to viewport
+  x = Math.max(8, Math.min(x, window.innerWidth  - tw - 8));
+  y = Math.max(8, Math.min(y, window.innerHeight - th - 8));
+  tip.style.left = x + 'px';
+  tip.style.top  = y + 'px';
+});
+
 /* ── Boot ───────────────────────────────────────────────── */
 (function init() {
   const sn = localStorage.getItem(LS_N);
@@ -825,7 +942,7 @@ document.addEventListener('keydown', e => {
   names = sn ? JSON.parse(sn) : [...DEFAULTS];
   if (sh) {
     const raw = JSON.parse(sh);
-    history = raw.map(e => typeof e === 'string' ? { name: e, ts: null } : e)
+    history = raw.map(e => typeof e === 'string' ? { name: e, ts: null, participants: [] } : e)
                  .slice(0, MAX_HIST);
   }
   renderList();
